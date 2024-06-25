@@ -21,13 +21,15 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoAlertPresentException
 from rapidfuzz import fuzz, process, utils
 
+import string
+
 # REGEXES
 
 GAZETTE_REGEX_PATTERN = r"\d\d\d\d\d\d\(\d?\d\.\d\d\)" 
 ROLLNO_REGEX = r"(?P<_>Roll\|No\.\|:)(?P<roll>\|[0-9|]{0,6}\|)(?P<__>Gender)"
 NAME_REGEX = r"(?P<_>\|Name\|of\|Student\|:)(?P<name>\|[A-Z|]*\|)(?P<__>Mother's)"
 EXAM_REGEX = r"(?P<_>\|Exam\|Name\|:)(?P<exam>\|[A-Z|&.()]*\|)(?P<__>Name)"
-
+SESSION_REGEX = r"(?P<_>Session\|:\|)(?P<session>WINTER-\d\d\d\d|SUMMER-\d\d\d\d)(\|)"
 # Begin by reading the pdf
 
 choices = glob.glob("*.pdf")
@@ -43,8 +45,10 @@ text = "|".join([word[4] for word in initial_page.get_text("words")])
 # roll = re.findall(ROLLNO_REGEX, text)[0][1].replace("|", " ").strip()
 # name = re.findall(NAME_REGEX, text)[0][1].replace("|", " ").strip()
 exam = re.findall(EXAM_REGEX, text)[0][1].replace("|", " ").strip()
+session = re.findall(SESSION_REGEX, text)[0][1].replace('|', " ").strip()
 
 metadata["exam"] = exam
+metadata["session"] = session
 metadata["filename"] = file_selected.split(".")[0]
 
 for page in doc:
@@ -76,6 +80,20 @@ with webdriver.Chrome(options=chrome_options) as driver:
     driver.maximize_window()
     html = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'html')))
     driver.execute_script("document.body.style.zoom='125 %'")
+    
+    session_elem = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'lblsess')))
+    # print(f"{session} == {session_elem.text}?")
+    if not (session[0] == session_elem.text[0] and session[-1] == session_elem.text[-1]):
+        # Hack for previous exams, there is no way to programmatically find the previous exam button, cuz they putin an image der.
+        previous_exam_button = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'ImageButton7'))) # WInter23
+        previous_exam_button.click()
+        html = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'html')))
+        session_elem = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'lblsess')))
+        print(f"{session} == {session_elem.text}?")
+        if not boolean_user_choice():
+            print(f"{ANSI.FAIL}[ERROR] Cannot find the correct session{ANSI.ENDC}")
+            sys.exit(1)
+    
     faculty_select = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'ddlselectfaculty')))
     Select(faculty_select).select_by_value('1')
     _exam_select = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'ddlselectexam')))
@@ -109,15 +127,73 @@ with webdriver.Chrome(options=chrome_options) as driver:
         roll_number = int(roll_number.strip())
         sgpa = float(sgpa.strip())
         
-        if roll_number in roll_numbers:
-            FILTERED_GAZETTE.append((roll_number, sgpa))
         ENTIRE_GAZETTE.append((roll_number, sgpa))
+
+    # Externally Known Scores
+    EXTERNALLY_INJECTED = []
+    if os.path.exists(f"{metadata['filename']}-known.i.txt"):
+        names = [i['name'] for i in data]
+        with open(f"{metadata['filename']}-known.i.txt", "r") as f:
+            lines = f.readlines()
+            for line in lines:
+                if line.startswith(tuple(string.digits)):
+                    roll_number, sgpa = line.split()
+                    roll_number = int(roll_number.strip())
+                    sgpa = float(sgpa.strip())
+                    EXTERNALLY_INJECTED.append(roll_number)
+                    ENTIRE_GAZETTE.append((roll_number, sgpa))
+                else:
+                    _name, sgpa = line.split(',')
+                    found = process.extractOne(_name, names, scorer=fuzz.token_sort_ratio, processor=utils.default_process)
+                    print(f"Matched {found[0]} with {_name}")
+                    is_correct = boolean_user_choice()
+                    if not is_correct:
+                        print('Skipping')
+                        continue
+                    roll_number = data[found[-1]]['roll']
+                    sgpa = float(sgpa.strip())
+                    EXTERNALLY_INJECTED.append(roll_number)
+                    ENTIRE_GAZETTE.append((roll_number, sgpa))
+    
+    GAZETTE_WITHHELD_ENROLLMENT = []
+    GAZETTE_WITHHELD_TABULATION = []
+    
+    try:
+        sections = gazette_table.text.split("***")
+        enrollment_issues = sections[1].strip()
+        tabulation_issues = sections[2].strip()
         
+        for match in (re.compile(r'\d{1,6}')).finditer(enrollment_issues):
+            roll_number = int(match.group())
+            if roll_number in EXTERNALLY_INJECTED:
+                continue
+            GAZETTE_WITHHELD_ENROLLMENT.append(roll_number)
+            ENTIRE_GAZETTE.append((roll_number, -1.0))
+        for match in (re.compile(r'\d{1,6}')).finditer(tabulation_issues):
+            roll_number = int(match.group())
+            if roll_number in EXTERNALLY_INJECTED:
+                continue
+            GAZETTE_WITHHELD_TABULATION.append(roll_number)
+            ENTIRE_GAZETTE.append((roll_number, -2.0))
+    except Exception as e:
+        print(e)
+        pass
+    
+
+    
+    
+    # Filter the gazette to only include the roll numbers that are in the pdf
+    for entry in ENTIRE_GAZETTE:
+        if entry[0] in roll_numbers:
+            FILTERED_GAZETTE.append(entry)
+    
+    
     unknown = []
     for rn in roll_numbers:
         if rn not in [i[0] for i in FILTERED_GAZETTE]:
             unknown.append((rn, 0.0))
     FILTERED_GAZETTE.extend(unknown)
+    
     
     FILTERED_GAZETTE.sort(key=lambda x: -x[1])
     ENTIRE_GAZETTE.sort(key=lambda x: -x[1])
@@ -185,7 +261,11 @@ with webdriver.Chrome(options=chrome_options) as driver:
         f.write('rank,roll,name,sgpa,error\n')
         for i, d in enumerate(data):
             output = f"{i+1},{d['roll']},{d['name']},{d['sgpa']},"
-            if d['roll'] not in COMPLETED:
+            if d['roll'] in GAZETTE_WITHHELD_ENROLLMENT:
+                output+="Withheld for Enrollment"
+            elif d['roll'] in GAZETTE_WITHHELD_TABULATION:
+                output+="Withheld for Tabulation"
+            elif d['roll'] not in COMPLETED:
                 output+="Invalid Roll Number"
             f.write(output + "\n")
         f.write('\n')
