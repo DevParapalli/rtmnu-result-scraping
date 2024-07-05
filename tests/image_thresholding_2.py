@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 
 img = cv.imread('image.png', cv.IMREAD_GRAYSCALE)
 assert img is not None, "file could not be read, check with os.path.exists()"
-ret,thresh1 = cv.threshold(img,192,255,cv.THRESH_BINARY)
+ret,thresh1 = cv.threshold(img,200,255,cv.THRESH_BINARY)
 cv.imwrite('image_thresholded.png', thresh1)
 # image_blurred = cv.medianBlur(thresh1,3)
 # kernel = np.zeros((3,3), np.uint8)

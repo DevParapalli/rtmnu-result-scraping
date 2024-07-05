@@ -7,7 +7,7 @@ input_image = cv.imread("image.png")
 
 # Convert the image to grayscale
 gray = cv.cvtColor(input_image, cv.COLOR_BGR2GRAY)
-ret,gray = cv.threshold(gray,192,255,cv.THRESH_BINARY)
+ret,gray = cv.threshold(gray,250,255,cv.THRESH_BINARY)
 # Create a LineSegmentDetector object
 detector = cv.createLineSegmentDetector()
 
