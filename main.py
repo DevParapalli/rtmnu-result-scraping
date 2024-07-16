@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import tqdm
 from util import boolean_user_choice, user_choice, ANSI
 import glob
 import pymupdf
@@ -27,7 +28,7 @@ import string
 
 GAZETTE_REGEX_PATTERN = r"\d\d\d\d\d\d\(\d?\d\.\d\d\)" 
 ROLLNO_REGEX = r"(?P<_>Roll\|No\.\|:)(?P<roll>\|[0-9|]{0,6}\|)(?P<__>Gender)"
-NAME_REGEX = r"(?P<_>\|Name\|of\|Student\|:)(?P<name>\|[A-Z|]*\|)(?P<__>Mother's)"
+NAME_REGEX = r"(?P<_>\|Name\|of\|Student\|:)(?P<name>\|[A-Z`.|]*\|)(?P<__>Mother's)"
 EXAM_REGEX = r"(?P<_>\|Exam\|Name\|:)(?P<exam>\|[A-Z|&.()]*\|)(?P<__>Name)"
 SESSION_REGEX = r"(?P<_>Session\|:\|)(?P<session>WINTER-\d\d\d\d|SUMMER-\d\d\d\d)(\|)"
 # Begin by reading the pdf
@@ -54,11 +55,29 @@ metadata["filename"] = file_selected.split(".")[0]
 for page in doc:
     text = "|".join([word[4] for word in page.get_text("words")])
     roll = re.findall(ROLLNO_REGEX, text)[0][1].replace("|", " ").strip()
+    # print(text)
     name = re.findall(NAME_REGEX, text)[0][1].replace("|", " ").strip()
     data.append({
         "name": name,
         "roll": int(roll),
     })
+
+if "--remap" in sys.argv or "-r" in sys.argv:
+    known1 = int(input("Enter known roll number from old sheet: "))
+    known2 = int(input("Enter known roll number from new sheet: "))
+    offset = known2 - known1
+    print(f"Offset is {offset}, changing {known1} to {known1 + offset}({known2})")
+    for i in range(len(data)):
+        data[i]['roll'] = data[i]['roll'] + offset
+    exam = input("Enter the correct exam name: Currently: " + exam  + ": ")
+    metadata["exam"] = exam
+    session = input("Enter the correct session name: Currently: " + session  + ": ")
+    metadata["session"] = session.capitalize()
+    filename = input("Enter the correct filename: Currently: " + metadata["filename"] + ": ")
+    metadata["filename"] = filename
+    
+    
+    
 
 
 roll_numbers = [i['roll'] for i in data]
@@ -234,28 +253,34 @@ with webdriver.Chrome(options=chrome_options) as driver:
     roll_no_input.send_keys(str(roll_numbers[0]))
     submit_button = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'imgbtnviewmarksheet')))
     submit_button.click()
-    
-    for i, roll in enumerate(roll_numbers): 
-        driver.execute_script("window.history.go(-1)")
-        roll_no_input = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'txtrollno')))
-        roll_no_input.clear()
-        roll_no_input.send_keys(str(roll))
-        submit_button = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'imgbtnviewmarksheet')))
-        submit_button.click()
-        # Check if invalid
-        try:
-            Alert(driver).accept()
-            print(f"{ANSI.FAIL}[ERROR] {roll} is invalid.{ANSI.ENDC}")
-            continue
-        except NoAlertPresentException:
-            pass
-        # wait for the image to load
-        image_frame = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'ContentPlaceHolder1_ifrm')))
-        driver.switch_to.frame(image_frame)
-        image = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'img')))
-        image.screenshot(f'{os.getcwd()}{os.path.sep}{folder}{os.path.sep}{roll}-{data[i]["name"]}.png')
-        driver.switch_to.default_content()
-        COMPLETED.add(roll)
+    try:
+        Alert(driver).accept()
+        print(f"{ANSI.FAIL}[ERROR] {roll_numbers[0]} is invalid.{ANSI.ENDC}")
+    except NoAlertPresentException:
+        print(f"{ANSI.OKGREEN}[INFO] Extracting Marksheets.{ANSI.ENDC}")
+        pass
+    if not ("--dry" in sys.argv or "-d" in sys.argv):
+        for i, roll in tqdm.tqdm(enumerate(roll_numbers)): 
+            driver.execute_script("window.history.go(-1)")
+            roll_no_input = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'txtrollno')))
+            roll_no_input.clear()
+            roll_no_input.send_keys(str(roll))
+            submit_button = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'imgbtnviewmarksheet')))
+            submit_button.click()
+            # Check if invalid
+            try:
+                Alert(driver).accept()
+                print(f"\n{ANSI.FAIL}[ERROR] {roll} is invalid.{ANSI.ENDC}") # newline  due to tqdm
+                continue
+            except NoAlertPresentException:
+                pass
+            # wait for the image to load
+            image_frame = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'ContentPlaceHolder1_ifrm')))
+            driver.switch_to.frame(image_frame)
+            image = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'img')))
+            image.screenshot(f'{os.getcwd()}{os.path.sep}{folder}{os.path.sep}{roll}-{data[i]["name"]}.png')
+            driver.switch_to.default_content()
+            COMPLETED.add(roll)
     
     with open(f"{metadata['filename']}.csv", "w") as f:
         f.write('rank,roll,name,sgpa,error\n')

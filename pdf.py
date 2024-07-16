@@ -31,6 +31,7 @@ def main():
     doc: pymupdf.Document = pymupdf.open(file_selected)
     initial_page = doc[0]
     text = "|".join([word[4] for word in initial_page.get_text("words")])
+    print(text)
     roll = re.findall(ROLLNO_REGEX, text)[0][1].replace("|", " ").strip()
     name = re.findall(NAME_REGEX, text)[0][1].replace("|", " ").strip()
     exam = re.findall(EXAM_REGEX, text)[0][1].replace("|", " ").strip()
